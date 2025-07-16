@@ -210,16 +210,40 @@ class BayesianDynamicFactorVec(PyMCStateSpace):
         """
         names = []
 
-        # Factor states
-        for i in range(self.k_factors):
-            for lag in range(self.factor_order):
-                names.append(f"factor_{i+1}_lag{lag}")
+        # # Factor states
+        # for i in range(self.k_factors):
+        #     for lag in range(self.factor_order):
+        #         names.append(f"factor_{i+1}_lag{lag}")
 
-        # Idiosyncratic error states
-        if self.error_order > 0:
-            for i in range(self.k_endog):
-                for lag in range(self.error_order):
-                    names.append(f"error_{i+1}_lag{lag}")
+        # # Idiosyncratic error states
+        # if self.error_order > 0:
+        #     for i in range(self.k_endog):
+        #         for lag in range(self.error_order):
+        #             names.append(f"error_{i+1}_lag{lag}")
+
+
+        # after the reordering:
+        # (factors_lag0, errors_lag0, factor_lag1, errors_lag1, ...)
+        
+        # Factor states
+        min_order = min(self.factor_order, self.error_order)
+        for lag in range(min_order):
+            for i in range(self.k_factors):
+                names.append(f"factor_{i+1}_lag{lag}")
+            for j in range(self.k_endog):
+                names.append(f"error_{j+1}_lag{lag}")
+
+        # If factor_order > error_order, add remaining factor states
+        if self.factor_order > self.error_order:
+            for lag in range(min_order, self.factor_order):
+                for i in range(self.k_factors):
+                    names.append(f"factor_{i+1}_lag{lag}")
+
+        # If factor_order < error_order, add remaining error states
+        if self.factor_order < self.error_order:
+            for lag in range(min_order, self.error_order):
+                for j in range(self.k_endog):
+                    names.append(f"error_{j+1}_lag{lag}")
 
         return names
 
@@ -298,7 +322,6 @@ class BayesianDynamicFactorVec(PyMCStateSpace):
 
         self.ssm["initial_state_cov", :, :] = P0
 
-        # TODO vectorize the design matrix
         # Design matrix
         self.ssm["design", :, :] = 0.0
 
@@ -318,7 +341,7 @@ class BayesianDynamicFactorVec(PyMCStateSpace):
         #     # Loadings for each observed variable on the latent factors
         #     self.ssm["design", i, self.k_factors * self.factor_order + i * self.error_order] = 1.0
 
-        # TODO vectorize the transition matrix or use block matrices (reordering states, check the VAR implementation)
+
         self.ssm["transition", :, :] = 0.0
         if self.factor_order > 0:
             # Transition matrix
@@ -358,13 +381,9 @@ class BayesianDynamicFactorVec(PyMCStateSpace):
             diag_ar = pt.concatenate([factor_ar[:, i], error_ar[:, i]], axis=0)
 
             block_start = i * (self.k_factors + self.k_endog)
-            # Set AR coefficients for the top row of each factor AR(p) block
-            block_size = self.k_factors + self.k_endog
-            assert block_start + block_size <= self.k_states, f"Transition matrix too small: needs {block_start + block_size}, has {self.k_states}"
-
             self.ssm["transition", :self.k_factors + self.k_endog, block_start:block_start + self.k_factors + self.k_endog] = pt.diag(diag_ar)
 
-            # TODO could be done in just one big eye matrix (self.k_factors + self.k_endog)*self.factor_order 
+            # Could be done in just one big eye matrix (self.k_factors + self.k_endog)*self.factor_order 
             # (done below out of the for loop, so following lines commented out)
             #if block_start + block_size <= self.k_states and i > 0:
             #    self.ssm["transition", block_start:block_start + self.k_factors + self.k_endog, (i-1)*(self.k_factors + self.k_endog): i*(self.k_factors + self.k_endog)] = pt.eye(self.k_factors + self.k_endog)
@@ -380,17 +399,12 @@ class BayesianDynamicFactorVec(PyMCStateSpace):
                 if i==0 and min_order == 1:
                     self.ssm["transition", block_start:block_start + self.k_factors, : self.k_factors] = pt.eye(self.k_factors)
                 else:
-                    print(f"block_start: {block_start}, k_factors: {self.k_factors}, min_order: {min_order}, i: {i}")
-                    print(min_order*(self.k_endog+self.k_factors))
                     self.ssm["transition", block_start:block_start + self.k_factors, min_order*(self.k_endog+self.k_factors)+(i-1)*self.k_factors:min_order*(self.k_endog+self.k_factors)+i*self.k_factors] = pt.eye(self.k_factors)
 
         elif self.error_order > self.factor_order:
             for i in range(self.error_order - self.factor_order):
                 block_start = self.factor_order * (self.k_factors + self.k_endog) + i * self.k_endog
-                # Set AR coefficients for the top row of each error AR(q) block
-                assert block_start + self.k_endog <= self.k_states, f"Transition matrix too small: needs {block_start + self.k_endog}, has {self.k_states}"
                 self.ssm["transition", self.k_factors:self.k_factors + self.k_endog, block_start:block_start + self.k_endog] = pt.diag(error_ar[:, self.factor_order + i])
-
                 if i==0 and min_order == 1:
                     self.ssm["transition", block_start:block_start + self.k_endog, : self.k_endog] = pt.eye(self.k_endog)
                 else:
